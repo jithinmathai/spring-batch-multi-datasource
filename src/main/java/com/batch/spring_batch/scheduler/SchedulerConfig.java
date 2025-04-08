@@ -20,7 +20,8 @@ public class SchedulerConfig {
         this.updateOptInJob = updateOptInJob;
     }
 
-    @Scheduled(fixedRate = 60000) // Run every minute
+    @Scheduled(fixedRate = 6000000)
+    @Scheduled(cron = "* * * * * 0")// Run every minute
     public void runUpdateOptInJob() {
         try {
             jobLauncher.run(updateOptInJob,
