@@ -2,11 +2,12 @@ package com.batch.spring_batch.batch;
 
 import com.batch.spring_batch.dto.Quote;
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import javax.sql.DataSource;
-import lombok.extern.slf4j.Slf4j;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.ExitStatus;
@@ -20,12 +21,14 @@ import org.springframework.batch.core.launch.support.RunIdIncrementer;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.batch.item.ItemProcessor;
+import org.springframework.batch.item.ItemWriter;
 import org.springframework.batch.item.database.JdbcBatchItemWriter;
 import org.springframework.batch.item.database.JdbcPagingItemReader;
 import org.springframework.batch.item.database.Order;
 import org.springframework.batch.item.database.builder.JdbcBatchItemWriterBuilder;
 import org.springframework.batch.item.database.builder.JdbcPagingItemReaderBuilder;
 import org.springframework.batch.item.database.support.PostgresPagingQueryProvider;
+import org.springframework.batch.item.support.CompositeItemWriter;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -58,12 +61,13 @@ public class BatchConfig {
         Map<String, Object> params = new HashMap<>();
         params.put("twoYearsAgo", LocalDateTime.now().minusYears(2));
         params.put("oneMonthAgo", LocalDateTime.now().minusMonths(1));
+        params.put("optIn", true);
 
         PostgresPagingQueryProvider queryProvider = new PostgresPagingQueryProvider();
         queryProvider.setSelectClause("SELECT id, quote_id, basic_quote_id, customer_name, customer_email, customer_phone, request_text, created_time, opt_in");
         queryProvider.setFromClause("FROM quote");
         // Use BETWEEN to restrict to records between two years and one month ago
-        queryProvider.setWhereClause("WHERE created_time BETWEEN :twoYearsAgo AND :oneMonthAgo");
+        queryProvider.setWhereClause("WHERE created_time BETWEEN :twoYearsAgo AND :oneMonthAgo AND opt_in = :optIn");
         Map<String, Order> sortKeys = new HashMap<>();
         sortKeys.put("id", Order.ASCENDING);
         queryProvider.setSortKeys(sortKeys);
@@ -172,6 +176,25 @@ public class BatchConfig {
         };
     }
 
+    @Bean
+    public ItemWriter<Quote> loggingItemWriter() {
+        return items -> items.forEach(quote ->
+                log.info("Deleting Quote - ID: {}, Quote ID: {}, Created Time: {}",
+                        quote.getId(), quote.getQuoteId(), quote.getCreatedTime())
+        );
+    }
+
+    @Bean
+    public ItemWriter<Quote> compositeDeleteWriter(@Qualifier("quoteDeleteWriter") JdbcBatchItemWriter<Quote> deleteWriter) {
+        CompositeItemWriter<Quote> compositeWriter = new CompositeItemWriter<>();
+
+        // Create a list of delegates: first log, then delete
+        compositeWriter.setDelegates(Arrays.asList(loggingItemWriter(), deleteWriter));
+
+        return compositeWriter;
+    }
+
+
     // -----------------------------------------------------------------------
     // Define the steps and the job
     // -----------------------------------------------------------------------
@@ -191,7 +214,7 @@ public class BatchConfig {
         return new StepBuilder("deleteOldQuotesStep", jobRepository)
                 .<Quote, Quote>chunk(50, transactionManager)
                 .reader(quoteReaderForDelete())
-                .writer(quoteDeleteWriter())
+                .writer(compositeDeleteWriter(quoteDeleteWriter()))
                 .listener(loggingListener())
                 .build();
     }
